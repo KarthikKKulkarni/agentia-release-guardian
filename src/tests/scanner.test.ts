@@ -12,110 +12,160 @@ import {promisify} from 'node:util'
 
 const execFileAsync = promisify(execFile)
 
-const testRepository =
-  'Y:\\HellzLab\\CopadoAgentAI\\guardian-test-repo'
+async function initializeRepository(
+  repository: string,
+): Promise<void> {
+  await execFileAsync(
+    'git',
+    ['init', '-b', 'master'],
+    {cwd: repository},
+  )
 
-describe('scanner integration', () => {
-  it('scans the clean test repository', async () => {
-    const result = await runScan(testRepository)
+  await execFileAsync(
+    'git',
+    ['config', 'user.email', 'guardian@test.local'],
+    {cwd: repository},
+  )
 
-    expect(result.repository.branch).toBe('master')
-    expect(result.changedFiles).toBe(0)
-    expect(result.findings).toHaveLength(0)
-    expect(result.riskScore).toBe(0)
-    expect(result.riskLevel).toBe('LOW')
-    expect(result.policy.evaluation.passed).toBe(true)
-    expect(result.releaseStatus).toBe('PASS')
-  })
+  await execFileAsync(
+    'git',
+    ['config', 'user.name', 'Guardian Test'],
+    {cwd: repository},
+  )
+}
 
-  it('blocks a risky release with multiple governance violations', async () => {
-    const repository = await mkdtemp(
-      join(tmpdir(), 'guardian-integration-'),
-    )
+async function commitRepository(
+  repository: string,
+): Promise<void> {
+  await execFileAsync(
+    'git',
+    ['add', '.'],
+    {cwd: repository},
+  )
 
-    try {
-      await writeFile(
-        join(repository, 'PaymentService.cls'),
-        'public class PaymentService {}',
-      )
+  await execFileAsync(
+    'git',
+    ['commit', '-m', 'Initial test repository'],
+    {cwd: repository},
+  )
+}
 
-      await writeFile(
-        join(repository, 'PaymentServiceTest.cls'),
-        '@isTest public class PaymentServiceTest {}',
-      )
+async function createCleanRepository(): Promise<string> {
+  const repository = await mkdtemp(
+    join(tmpdir(), 'guardian-clean-'),
+  )
 
-      await writeFile(
-        join(
-          repository,
-          'Admin.permissionset-meta.xml',
-        ),
-        '<PermissionSet></PermissionSet>',
-      )
+  await writeFile(
+    join(repository, 'README.md'),
+    '# Guardian Test Repository\n',
+  )
 
-      await writeFile(
-        join(repository, 'destructiveChanges.xml'),
-        '<Package></Package>',
-      )
-
-      await writeFile(
-        join(repository, 'guardian.yml'),
-        `maxRiskScore: 3
+  await writeFile(
+    join(repository, 'guardian.yml'),
+    `maxRiskScore: 70
 
 rules:
   requireTests: true
   blockDestructiveChanges: true
   requirePermissionReview: true
 `,
-      )
+  )
 
-      await execFileAsync(
-        'git',
-        ['init', '-b', 'master'],
-        {cwd: repository},
-      )
+  await initializeRepository(repository)
+  await commitRepository(repository)
 
-      await execFileAsync(
-        'git',
-        ['config', 'user.email', 'guardian@test.local'],
-        {cwd: repository},
-      )
+  return repository
+}
 
-      await execFileAsync(
-        'git',
-        ['config', 'user.name', 'Guardian Test'],
-        {cwd: repository},
-      )
+async function createRiskyRepository(): Promise<string> {
+  const repository = await mkdtemp(
+    join(tmpdir(), 'guardian-risky-'),
+  )
 
-      await execFileAsync(
-        'git',
-        ['add', '.'],
-        {cwd: repository},
-      )
+  await writeFile(
+    join(repository, 'PaymentService.cls'),
+    'public class PaymentService {}',
+  )
 
-      await execFileAsync(
-        'git',
-        ['commit', '-m', 'Initial test repository'],
-        {cwd: repository},
-      )
+  await writeFile(
+    join(repository, 'PaymentServiceTest.cls'),
+    '@isTest public class PaymentServiceTest {}',
+  )
 
-      await writeFile(
-        join(repository, 'PaymentService.cls'),
-        'public class PaymentService { void changed() {} }',
-      )
+  await writeFile(
+    join(
+      repository,
+      'Admin.permissionset-meta.xml',
+    ),
+    '<PermissionSet></PermissionSet>',
+  )
 
-      await writeFile(
-        join(
-          repository,
-          'Admin.permissionset-meta.xml',
-        ),
-        '<PermissionSet><modifyAllData>true</modifyAllData></PermissionSet>',
-      )
+  await writeFile(
+    join(repository, 'destructiveChanges.xml'),
+    '<Package></Package>',
+  )
 
-      await writeFile(
-        join(repository, 'destructiveChanges.xml'),
-        '<Package><types><members>OldComponent</members></types></Package>',
-      )
+  await writeFile(
+    join(repository, 'guardian.yml'),
+    `maxRiskScore: 3
 
+rules:
+  requireTests: true
+  blockDestructiveChanges: true
+  requirePermissionReview: true
+`,
+  )
+
+  await initializeRepository(repository)
+  await commitRepository(repository)
+
+  await writeFile(
+    join(repository, 'PaymentService.cls'),
+    'public class PaymentService { void changed() {} }',
+  )
+
+  await writeFile(
+    join(
+      repository,
+      'Admin.permissionset-meta.xml',
+    ),
+    '<PermissionSet><modifyAllData>true</modifyAllData></PermissionSet>',
+  )
+
+  await writeFile(
+    join(repository, 'destructiveChanges.xml'),
+    '<Package><types><members>OldComponent</members></types></Package>',
+  )
+
+  return repository
+}
+
+describe('scanner integration', () => {
+  it('scans a clean Git repository', async () => {
+    const repository = await createCleanRepository()
+
+    try {
+      const result = await runScan(repository)
+
+      expect(result.repository.branch).toBe('master')
+      expect(result.changedFiles).toBe(0)
+      expect(result.findings).toHaveLength(0)
+      expect(result.riskScore).toBe(0)
+      expect(result.riskLevel).toBe('LOW')
+      expect(result.policy.evaluation.passed).toBe(true)
+      expect(result.releaseStatus).toBe('PASS')
+    } finally {
+      await rm(repository, {
+        recursive: true,
+        force: true,
+      })
+    }
+  })
+
+  it('blocks a risky release with multiple governance violations', async () => {
+    const repository = await createRiskyRepository()
+
+    try {
       const result = await runScan(repository)
 
       expect(result.changedFiles).toBe(3)
